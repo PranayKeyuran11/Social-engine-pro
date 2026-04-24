@@ -1,16 +1,27 @@
 import smtplib
 import os
+import logging
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
 
 def send_content_email(to_email: str, topic: str, content: dict):
+
+    # ── Guard: catch missing env vars immediately ──
+    if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
+        logger.error("[Mailer] ❌ GMAIL_ADDRESS or GMAIL_APP_PASSWORD is not set in environment!")
+        return
+
+    logger.info(f"[Mailer] Preparing email to {to_email} | from {GMAIL_ADDRESS}")
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"🚀 Daily Content: {topic}"
     msg["From"] = GMAIL_ADDRESS
@@ -80,6 +91,23 @@ def send_content_email(to_email: str, topic: str, content: dict):
     """
 
     msg.attach(MIMEText(html, "html"))
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        server.sendmail(GMAIL_ADDRESS, to_email, msg.as_string())
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            server.sendmail(GMAIL_ADDRESS, to_email, msg.as_string())
+            logger.info(f"[Mailer] ✅ Email successfully sent to {to_email}")
+
+    except smtplib.SMTPAuthenticationError:
+        logger.error(
+            "[Mailer] ❌ Authentication failed — "
+            "check that GMAIL_APP_PASSWORD is a valid Gmail App Password, not your regular password"
+        )
+    except smtplib.SMTPRecipientsRefused:
+        logger.error(f"[Mailer] ❌ Recipient refused: {to_email} — check the email address is valid")
+    except smtplib.SMTPSenderRefused:
+        logger.error(f"[Mailer] ❌ Sender refused: {GMAIL_ADDRESS} — check GMAIL_ADDRESS is correct")
+    except smtplib.SMTPException as e:
+        logger.error(f"[Mailer] ❌ SMTP error: {e}")
+    except Exception as e:
+        logger.error(f"[Mailer] ❌ Unexpected error while sending email: {e}", exc_info=True)
