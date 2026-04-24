@@ -7,7 +7,9 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-scheduler = BackgroundScheduler(timezone="UTC")
+# FIX 1 — Use IST as the scheduler base timezone instead of UTC
+IST = pytz.timezone("Asia/Kolkata")
+scheduler = BackgroundScheduler(timezone=IST)
 
 
 def get_db():
@@ -29,6 +31,7 @@ def run_automation_for_user(automation_id: int):
         auto = conn.execute("SELECT * FROM automations WHERE id = ?", (automation_id,)).fetchone()
 
     if not auto or not auto["is_active"]:
+        logger.warning(f"[Scheduler] Automation #{automation_id} is inactive or not found — skipping.")
         return
 
     # ── Pick today's topic from the rotation list ──
@@ -46,39 +49,50 @@ def run_automation_for_user(automation_id: int):
     context = auto["context"] or ""
     to_email = auto["email"]
 
-    logger.info(f"[Scheduler] Automation #{automation_id} → topic [{current_index+1}/{len(topics)}]: '{topic}' → {to_email}")
+    logger.info(
+        f"[Scheduler] Automation #{automation_id} → "
+        f"topic [{current_index + 1}/{len(topics)}]: '{topic}' → {to_email}"
+    )
 
     try:
         graph = build_graph()
         result = graph.invoke({
-            "topic": topic, "context": context,
-            "instagram_caption": None, "instagram_hashtags": None,
-            "linkedin_post": None, "linkedin_article": None, "announcement": None,
+            "topic": topic,
+            "context": context,
+            "instagram_caption": None,
+            "instagram_hashtags": None,
+            "linkedin_post": None,
+            "linkedin_article": None,
+            "announcement": None,
         })
         send_content_email(to_email, topic, dict(result))
-        logger.info(f"[Scheduler] ✅ Email sent to {to_email}")
+        logger.info(f"[Scheduler] ✅ Email sent to {to_email} for automation #{automation_id}")
 
-        # Advance index and update last_sent
+        # Advance topic index and update last_sent
         with get_db() as conn:
             conn.execute(
                 "UPDATE automations SET last_sent = CURRENT_TIMESTAMP, current_index = ? WHERE id = ?",
-                (next_index, automation_id)
+                (next_index, automation_id),
             )
             conn.commit()
 
     except Exception as e:
-        logger.error(f"[Scheduler] ❌ Automation #{automation_id} failed: {e}")
+        logger.error(f"[Scheduler] ❌ Automation #{automation_id} failed: {e}", exc_info=True)
 
 
 def schedule_automation(automation_id: int, hour: int, minute: int, timezone: str = "Asia/Kolkata"):
     job_id = f"auto_{automation_id}"
+
+    # Remove existing job first so we don't get duplicates on reload
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
 
+    # FIX 2 — Safe timezone fallback so NULL from DB never causes a silent UTC default
     try:
-        tz = pytz.timezone(timezone)
+        tz = pytz.timezone(timezone) if timezone else IST
     except Exception:
-        tz = pytz.timezone("Asia/Kolkata")
+        logger.warning(f"[Scheduler] Invalid timezone '{timezone}' for job {job_id} — defaulting to IST")
+        tz = IST
 
     scheduler.add_job(
         run_automation_for_user,
@@ -87,7 +101,7 @@ def schedule_automation(automation_id: int, hour: int, minute: int, timezone: st
         id=job_id,
         replace_existing=True,
     )
-    logger.info(f"[Scheduler] Scheduled job {job_id} at {hour:02d}:{minute:02d} ({timezone})")
+    logger.info(f"[Scheduler] Scheduled job {job_id} at {hour:02d}:{minute:02d} ({tz.zone})")
 
 
 def unschedule_automation(automation_id: int):
@@ -95,19 +109,39 @@ def unschedule_automation(automation_id: int):
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
         logger.info(f"[Scheduler] Removed job {job_id}")
+    else:
+        logger.warning(f"[Scheduler] Job {job_id} not found — nothing to remove")
 
 
 def reload_all_automations():
-    for auto in get_all_active_automations():
+    """Re-register all active automation jobs from the DB.
+    Called on startup so jobs survive Render restarts.
+    """
+    automations = get_all_active_automations()
+    logger.info(f"[Scheduler] Reloading {len(automations)} active automation(s)...")
+
+    for auto in automations:
         try:
             h, m = map(int, auto["send_time"].split(":"))
-            schedule_automation(auto["id"], h, m, auto["timezone"])
+
+            # FIX 2 — Never pass NULL timezone to schedule_automation
+            tz = auto["timezone"] if auto["timezone"] else "Asia/Kolkata"
+
+            logger.info(
+                f"[Scheduler] Reloading #{auto['id']} "
+                f"at {h:02d}:{m:02d} tz={tz} → {auto['email']}"
+            )
+            schedule_automation(auto["id"], h, m, tz)
+
         except Exception as e:
-            logger.error(f"[Scheduler] Failed to reload automation #{auto['id']}: {e}")
+            logger.error(f"[Scheduler] Failed to reload automation #{auto['id']}: {e}", exc_info=True)
 
 
 def start_scheduler():
+    # FIX 3 — Guard against double-start (important on Render with hot reloads)
     if not scheduler.running:
         scheduler.start()
         reload_all_automations()
-        logger.info("[Scheduler] Started.")
+        logger.info("[Scheduler] ✅ Started and all jobs loaded.")
+    else:
+        logger.info("[Scheduler] Already running — skipping start.")
