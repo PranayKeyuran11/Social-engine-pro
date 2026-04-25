@@ -631,7 +631,7 @@ MAIN_TEMPLATE = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Socia
                     <option value="Students">Students</option>
                 </select>
             </div>
-            <button class="btn btn-generate" id="generateBtn" onclick="generateContent()" {% if not has_own_key and daily_usage >= limit %}disabled{% endif %}><i class="bi bi-magic"></i> Generate Content</button>
+            <button class="btn btn-generate" id="generateBtn" onclick="generateContent()"><i class="bi bi-magic"></i> Generate Content</button>
         </div>
     </div>
     <div class="col-lg-8">
@@ -1216,6 +1216,11 @@ def generate():
         daily_usage = get_daily_usage(session['user_id'])
         if daily_usage >= DAILY_GENERATION_LIMIT:
             return jsonify({'error': 'Daily limit reached. Add your own Gemini API key in Settings for unlimited use.'}), 429
+    
+    # Validate that we actually have an API key
+    api_key_to_use = user.get('gemini_api_key') or os.environ.get("GOOGLE_API_KEY")
+    if not api_key_to_use:
+        return jsonify({'error': 'No API key configured. Add your Gemini API key in Settings.'}), 400
 
     data = request.get_json()
     topic = data.get('topic', '')
