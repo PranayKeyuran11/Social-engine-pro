@@ -9,15 +9,14 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-GMAIL_ADDRESS = os.getenv("GMAIL_ADDRESS")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+GMAIL_ADDRESS = os.getenv("SMTP_USER")
+GMAIL_APP_PASSWORD = os.getenv("SMTP_PASSWORD")
 
 
 def send_content_email(to_email: str, topic: str, content: dict):
 
-    # ── Guard: catch missing env vars immediately ──
     if not GMAIL_ADDRESS or not GMAIL_APP_PASSWORD:
-        logger.error("[Mailer] ❌ GMAIL_ADDRESS or GMAIL_APP_PASSWORD is not set in environment!")
+        logger.error("[Mailer] ❌ SMTP_USER or SMTP_PASSWORD is not set in environment!")
         return
 
     logger.info(f"[Mailer] Preparing email to {to_email} | from {GMAIL_ADDRESS}")
@@ -101,12 +100,12 @@ def send_content_email(to_email: str, topic: str, content: dict):
     except smtplib.SMTPAuthenticationError:
         logger.error(
             "[Mailer] ❌ Authentication failed — "
-            "check that GMAIL_APP_PASSWORD is a valid Gmail App Password, not your regular password"
+            "check that SMTP_PASSWORD is a valid Gmail App Password, not your regular password"
         )
     except smtplib.SMTPRecipientsRefused:
         logger.error(f"[Mailer] ❌ Recipient refused: {to_email} — check the email address is valid")
     except smtplib.SMTPSenderRefused:
-        logger.error(f"[Mailer] ❌ Sender refused: {GMAIL_ADDRESS} — check GMAIL_ADDRESS is correct")
+        logger.error(f"[Mailer] ❌ Sender refused: {GMAIL_ADDRESS} — check SMTP_USER is correct")
     except smtplib.SMTPException as e:
         logger.error(f"[Mailer] ❌ SMTP error: {e}")
     except Exception as e:

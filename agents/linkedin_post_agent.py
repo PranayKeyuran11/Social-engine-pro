@@ -14,5 +14,5 @@ Professional tone, add a thought-provoking question at the end.
 Return ONLY the post text."""
 
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-    response = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
+    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
     return {"linkedin_post": response.text.strip()}
