@@ -34,6 +34,7 @@ def run_automation_for_user(automation_id: int):
     from graph.orchestrator import build_graph
     from mailer import send_content_email
 
+    # Fetch automation
     conn = get_db()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -45,6 +46,26 @@ def run_automation_for_user(automation_id: int):
     if not auto or not auto["is_active"]:
         logger.warning(f"[Scheduler] Automation #{automation_id} is inactive or missing — skipping.")
         return
+
+    # Fetch user's own Gemini API key if they have one
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT gemini_api_key FROM users WHERE id = %s", (auto["user_id"],))
+            user = cur.fetchone()
+    finally:
+        conn.close()
+
+    user_api_key = user.get("gemini_api_key") if user else None
+    api_key = user_api_key or os.environ.get("GOOGLE_API_KEY")
+
+    if not api_key:
+        logger.error(f"[Scheduler] Automation #{automation_id} — no API key found, skipping.")
+        return
+
+    # Set the key so agents can use it
+    os.environ["GOOGLE_API_KEY"] = api_key
+    logger.info(f"[Scheduler] Automation #{automation_id} using {'user' if user_api_key else 'shared'} API key.")
 
     raw_topics = auto["topics"] or ""
     topics = [t.strip() for t in raw_topics.split("||") if t.strip()]
