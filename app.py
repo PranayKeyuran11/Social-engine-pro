@@ -1207,6 +1207,14 @@ def automation_delete(auto_id):
 
 @app.route('/generate', methods=['POST'])
 @login_required
+def debug_key():
+    user = get_user_by_id(session['user_id'])
+    return jsonify({
+        'has_own_key': bool(user.get('gemini_api_key')),
+        'key_preview': str(user.get('gemini_api_key'))[:8] + '...' if user.get('gemini_api_key') else None,
+        'daily_usage': get_daily_usage(session['user_id']),
+        'limit': DAILY_GENERATION_LIMIT
+    })
 def generate():
     user = get_user_by_id(session['user_id'])
     has_own_key = bool(user.get('gemini_api_key'))
