@@ -14,5 +14,5 @@ This is for sharing with your personal network. Warm, authentic, concise (2-3 se
 Return ONLY the message."""
 
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-    response = client.models.generate_content(model="gemini-3.1-flash-lite preview", contents=prompt)
+    response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
     return {"announcement": response.text.strip()}
