@@ -15,15 +15,26 @@ load_dotenv()
 # ─────────────────────────────────────────────
 # DATABASE
 # ─────────────────────────────────────────────
-DB_PATH = os.environ.get("DB_PATH", "/data/users.db")
+
+# Use /data for Render (persistent disk), fallback to local for development
+if os.path.exists("/data"):
+    DB_PATH = os.environ.get("DB_PATH", "/data/users.db")
+else:
+    DB_PATH = os.environ.get("DB_PATH", "users.db")
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
+
 def init_db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    # Create directory only if needed and it exists
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
     with get_db() as conn:
         conn.execute('''CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +60,7 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id)
         )''')
         conn.commit()
+
 
 init_db()
 start_scheduler()
@@ -350,8 +362,6 @@ AUTOMATION_TEMPLATE = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title
 .two-col > div { flex:1; }
 .btn-save { background:linear-gradient(135deg,#4f46e5,#6366f1); color:white; border:none; border-radius:10px; padding:0.875rem 2rem; font-size:0.95rem; font-weight:600; cursor:pointer; transition:all 0.3s; font-family:'Inter',sans-serif; }
 .btn-save:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(79,70,229,0.3); }
-
-/* Topic list builder */
 .topic-list { display:flex; flex-direction:column; gap:0.5rem; margin-bottom:0.75rem; }
 .topic-row { display:flex; align-items:center; gap:0.5rem; }
 .topic-row input { flex:1; padding:0.6rem 0.875rem; border:1.5px solid var(--border); border-radius:8px; font-size:0.875rem; font-family:'Inter',sans-serif; outline:none; }
@@ -361,8 +371,6 @@ AUTOMATION_TEMPLATE = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title
 .btn-add-topic { background:#f0f9ff; border:1px solid #bae6fd; color:#0369a1; border-radius:8px; padding:0.5rem 1rem; cursor:pointer; font-size:0.85rem; font-weight:500; transition:all 0.2s; font-family:'Inter',sans-serif; }
 .btn-add-topic:hover { background:#0369a1; color:white; }
 .topic-hint { font-size:0.78rem; color:var(--text-muted); margin-top:0.25rem; }
-
-/* Automation list */
 .auto-item { background:#f8fafc; border:1px solid var(--border); border-radius:12px; padding:1.25rem; display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; margin-bottom:0.75rem; }
 .auto-info h4 { font-size:0.95rem; font-weight:600; margin-bottom:0.4rem; }
 .auto-info p { font-size:0.8rem; color:var(--text-muted); margin:0 0 0.2rem; }
@@ -390,14 +398,10 @@ AUTOMATION_TEMPLATE = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title
         <h2><i class="bi bi-clock-history"></i> Automation Settings</h2>
         <p>Schedule daily content generation with rotating topics — a different topic every day.</p>
     </div>
-
     {% if message %}<div class="alert alert-{{ message_type }}">{{ message }}</div>{% endif %}
-
-    <!-- Create Automation -->
     <div class="card">
         <div class="card-title"><i class="bi bi-plus-circle" style="color:#4f46e5;"></i> Create New Automation</div>
         <form method="POST" action="/automation/create">
-
             <div class="mb-3">
                 <label class="form-label">Topic List <span style="color:#94a3b8;font-weight:400;">(rotates daily, one per day)</span></label>
                 <div class="topic-list" id="topicList">
@@ -409,7 +413,6 @@ AUTOMATION_TEMPLATE = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title
                 <button type="button" class="btn-add-topic" onclick="addTopic()"><i class="bi bi-plus"></i> Add Another Topic</button>
                 <p class="topic-hint">Topics rotate in order. After the last topic, it loops back to the first.</p>
             </div>
-
             <div class="mb-3"><label class="form-label">Context <span style="color:#94a3b8;font-weight:400;">(optional — applies to all topics)</span></label>
                 <textarea name="context" class="form-control" rows="2" placeholder="e.g. Focus on practical business impact"></textarea>
             </div>
@@ -435,8 +438,6 @@ AUTOMATION_TEMPLATE = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title
             <button type="submit" class="btn-save"><i class="bi bi-calendar-check"></i> Save Automation</button>
         </form>
     </div>
-
-    <!-- Existing Automations -->
     <div class="card">
         <div class="card-title"><i class="bi bi-list-check" style="color:#4f46e5;"></i> Your Automations</div>
         {% if automations %}
@@ -458,26 +459,25 @@ AUTOMATION_TEMPLATE = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title
                             {% endfor %}
                         </div>
                     </div>
+                    <div class="auto-actions">
+                        <span class="badge {% if a['is_active'] %}badge-active{% else %}badge-paused{% endif %}">
+                            {% if a['is_active'] %}Active{% else %}Paused{% endif %}
+                        </span>
+                        <form method="POST" action="/automation/toggle/{{ a['id'] }}" style="margin:0;">
+                            <button type="submit" class="btn-sm btn-toggle">
+                                {% if a['is_active'] %}<i class="bi bi-pause"></i> Pause{% else %}<i class="bi bi-play"></i> Resume{% endif %}
+                            </button>
+                        </form>
+                        <form method="POST" action="/automation/delete/{{ a['id'] }}" style="margin:0;" onsubmit="return confirm('Delete this automation?')">
+                            <button type="submit" class="btn-sm btn-danger"><i class="bi bi-trash"></i> Delete</button>
+                        </form>
+                    </div>
                 </div>
             {% else %}
                 <div class="auto-item">
                     <div class="auto-info">No topics set for this automation.</div>
                 </div>
             {% endif %}
-                <div class="auto-actions">
-                    <span class="badge {% if a['is_active'] %}badge-active{% else %}badge-paused{% endif %}">
-                        {% if a['is_active'] %}Active{% else %}Paused{% endif %}
-                    </span>
-                    <form method="POST" action="/automation/toggle/{{ a['id'] }}" style="margin:0;">
-                        <button type="submit" class="btn-sm btn-toggle">
-                            {% if a['is_active'] %}<i class="bi bi-pause"></i> Pause{% else %}<i class="bi bi-play"></i> Resume{% endif %}
-                        </button>
-                    </form>
-                    <form method="POST" action="/automation/delete/{{ a['id'] }}" style="margin:0;" onsubmit="return confirm('Delete this automation?')">
-                        <button type="submit" class="btn-sm btn-danger"><i class="bi bi-trash"></i> Delete</button>
-                    </form>
-                </div>
-            </div>
             {% endfor %}
         {% else %}
         <div class="empty-auto"><i class="bi bi-calendar-x"></i><p>No automations yet. Create one above.</p></div>
@@ -591,7 +591,6 @@ def automation():
 @app.route('/automation/create', methods=['POST'])
 @login_required
 def automation_create():
-    # Collect topic list and join with || separator
     raw_topics = request.form.getlist('topics[]')
     topics = [t.strip() for t in raw_topics if t.strip()]
 
@@ -686,6 +685,7 @@ def generate():
         else:
             return jsonify({'error': f'Failed to generate content: {msg}'}), 500
 
+
 if __name__ == '__main__':
-        port = int(os.environ.get("PORT", 5002))
-        app.run(debug=False, host='0.0.0.0', port=port)
+    port = int(os.environ.get("PORT", 5002))
+    app.run(debug=False, host='0.0.0.0', port=port)
