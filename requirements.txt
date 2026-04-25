@@ -5,4 +5,4 @@ langchain-google-genai
 python-dotenv
 apscheduler
 gunicorn
-pytz
+pytzpsycopg2-binary
