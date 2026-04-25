@@ -1,62 +1,62 @@
 from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
 from functools import wraps
 import os
-import sqlite3
 import hashlib
 import secrets
 from dotenv import load_dotenv
+import psycopg2
+import psycopg2.extras
 from graph.orchestrator import build_graph
 from scheduler import start_scheduler, schedule_automation, unschedule_automation
 
-app = Flask(__name__)
-app.secret_key = secrets.token_hex(32)
 load_dotenv()
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # ─────────────────────────────────────────────
 # DATABASE
 # ─────────────────────────────────────────────
 
-# Use /data for Render (persistent disk), fallback to local for development
-DB_PATH = "users.db"
-
-
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = False
     return conn
 
 
 def init_db():
-    # Create directory only if needed and it exists
-    db_dir = os.path.dirname(DB_PATH)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
-
-    with get_db() as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
-        # topics: "||"-separated list of topics
-        # current_index: which topic fires next
-        conn.execute('''CREATE TABLE IF NOT EXISTS automations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            topics TEXT NOT NULL,
-            context TEXT,
-            email TEXT NOT NULL,
-            send_time TEXT NOT NULL,
-            timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
-            is_active INTEGER NOT NULL DEFAULT 1,
-            current_index INTEGER NOT NULL DEFAULT 0,
-            last_sent TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        )''')
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS automations (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    topics TEXT NOT NULL,
+                    context TEXT,
+                    email TEXT NOT NULL,
+                    send_time TEXT NOT NULL,
+                    timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    current_index INTEGER NOT NULL DEFAULT 0,
+                    last_sent TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
         conn.commit()
+    finally:
+        conn.close()
 
 
 init_db()
@@ -70,18 +70,34 @@ def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
 def get_user_by_email(email):
-    with get_db() as conn:
-        return conn.execute('SELECT * FROM users WHERE email = ?', (email,)).fetchone()
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute('SELECT * FROM users WHERE email = %s', (email,))
+            return cur.fetchone()
+    finally:
+        conn.close()
 
 def get_user_by_username(username):
-    with get_db() as conn:
-        return conn.execute('SELECT * FROM users WHERE username = ?', (username,)).fetchone()
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute('SELECT * FROM users WHERE username = %s', (username,))
+            return cur.fetchone()
+    finally:
+        conn.close()
 
 def create_user(username, email, password):
-    with get_db() as conn:
-        conn.execute('INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)',
-                     (username, email, hash_password(password)))
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                'INSERT INTO users (username, email, password_hash) VALUES (%s, %s, %s)',
+                (username, email, hash_password(password))
+            )
         conn.commit()
+    finally:
+        conn.close()
 
 def login_required(f):
     @wraps(f)
@@ -439,7 +455,7 @@ AUTOMATION_TEMPLATE = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title
         <div class="card-title"><i class="bi bi-list-check" style="color:#4f46e5;"></i> Your Automations</div>
         {% if automations %}
             {% for a in automations %}
-            {% if 'topics' in a and a['topics'] %}
+            {% if a.get('topics') %}
                 {% set topics = a['topics'].split('||') %}
                 {% set idx = a['current_index'] %}
                 <div class="auto-item">
@@ -471,9 +487,7 @@ AUTOMATION_TEMPLATE = '''<!DOCTYPE html><html><head><meta charset="UTF-8"><title
                     </div>
                 </div>
             {% else %}
-                <div class="auto-item">
-                    <div class="auto-info">No topics set for this automation.</div>
-                </div>
+                <div class="auto-item"><div class="auto-info">No topics set for this automation.</div></div>
             {% endif %}
             {% endfor %}
         {% else %}
@@ -565,20 +579,26 @@ def index():
 # ─────────────────────────────────────────────
 
 def _get_automations():
-    with get_db() as conn:
-        rows = conn.execute(
-            'SELECT * FROM automations WHERE user_id = ? ORDER BY created_at DESC',
-            (session['user_id'],)
-        ).fetchall()
-        return [dict(row) for row in rows]
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                'SELECT * FROM automations WHERE user_id = %s ORDER BY created_at DESC',
+                (session['user_id'],)
+            )
+            return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
 
 def _render_automation(success=None, error=None):
     username = session.get('username')
-    return render_template_string(AUTOMATION_TEMPLATE,
-                                  navbar=navbar_html('automation', username),
-                                  automations=_get_automations(),
-                                  message=success or error,
-                                  message_type='success' if success else 'error')
+    return render_template_string(
+        AUTOMATION_TEMPLATE,
+        navbar=navbar_html('automation', username),
+        automations=_get_automations(),
+        message=success or error,
+        message_type='success' if success else 'error'
+    )
 
 @app.route('/automation')
 @login_required
@@ -596,7 +616,7 @@ def automation_create():
 
     context = request.form.get('context', '').strip()
     email = request.form.get('email', '').strip()
-    send_time = request.form.get('send_time', '08:00')
+    send_time = request.form.get('send_time', '08:00')[:5]  # normalise to HH:MM
     timezone = request.form.get('timezone', 'Asia/Kolkata')
 
     if not email or not send_time:
@@ -604,47 +624,69 @@ def automation_create():
 
     topics_str = '||'.join(topics)
 
-    with get_db() as conn:
-        cursor = conn.execute(
-            'INSERT INTO automations (user_id, topics, context, email, send_time, timezone, is_active, current_index) VALUES (?,?,?,?,?,?,1,0)',
-            (session['user_id'], topics_str, context, email, send_time, timezone)
-        )
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                '''INSERT INTO automations
+                   (user_id, topics, context, email, send_time, timezone, is_active, current_index)
+                   VALUES (%s,%s,%s,%s,%s,%s,TRUE,0) RETURNING id''',
+                (session['user_id'], topics_str, context, email, send_time, timezone)
+            )
+            auto_id = cur.fetchone()[0]
         conn.commit()
-        auto_id = cursor.lastrowid
+    finally:
+        conn.close()
 
     h, m = map(int, send_time.split(':'))
     schedule_automation(auto_id, h, m, timezone)
 
     return _render_automation(
-        success=f'Automation saved! {len(topics)} topic{"s" if len(topics)>1 else ""} will rotate daily at {send_time} ({timezone}).'
+        success=f'Automation saved! {len(topics)} topic{"s" if len(topics) > 1 else ""} '
+                f'will rotate daily at {send_time} ({timezone}).'
     )
 
 @app.route('/automation/toggle/<int:auto_id>', methods=['POST'])
 @login_required
 def automation_toggle(auto_id):
-    with get_db() as conn:
-        auto = conn.execute('SELECT * FROM automations WHERE id=? AND user_id=?',
-                            (auto_id, session['user_id'])).fetchone()
+    conn = get_db()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                'SELECT * FROM automations WHERE id=%s AND user_id=%s',
+                (auto_id, session['user_id'])
+            )
+            auto = cur.fetchone()
         if not auto:
             return redirect(url_for('automation'))
-        new_status = 0 if auto['is_active'] else 1
-        conn.execute('UPDATE automations SET is_active=? WHERE id=?', (new_status, auto_id))
+        new_status = not auto['is_active']
+        with conn.cursor() as cur:
+            cur.execute('UPDATE automations SET is_active=%s WHERE id=%s', (new_status, auto_id))
         conn.commit()
+    finally:
+        conn.close()
 
-    if new_status == 1:
-        h, m = map(int, auto['send_time'].split(':'))
+    if new_status:
+        h, m = map(int, auto['send_time'][:5].split(':'))
         schedule_automation(auto_id, h, m, auto['timezone'])
     else:
         unschedule_automation(auto_id)
+
     return redirect(url_for('automation'))
 
 @app.route('/automation/delete/<int:auto_id>', methods=['POST'])
 @login_required
 def automation_delete(auto_id):
-    with get_db() as conn:
-        conn.execute('DELETE FROM automations WHERE id=? AND user_id=?',
-                     (auto_id, session['user_id']))
+    conn = get_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                'DELETE FROM automations WHERE id=%s AND user_id=%s',
+                (auto_id, session['user_id'])
+            )
         conn.commit()
+    finally:
+        conn.close()
     unschedule_automation(auto_id)
     return redirect(url_for('automation'))
 
