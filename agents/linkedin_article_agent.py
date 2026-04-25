@@ -15,5 +15,5 @@ Professional but conversational. ~400 words.
 Return ONLY the article."""
 
     client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+    response = client.models.generate_content(model="gemini-3.1-flash-lite preview", contents=prompt)
     return {"linkedin_article": response.text.strip()}
