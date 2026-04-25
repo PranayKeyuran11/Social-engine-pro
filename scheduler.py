@@ -13,7 +13,7 @@ IST = pytz.timezone("Asia/Kolkata")
 scheduler = BackgroundScheduler(timezone=IST)
 
 
-DB_PATH = os.environ.get("DB_PATH", "/data/users.db")
+DB_PATH = "users.db"
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)

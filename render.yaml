@@ -4,10 +4,6 @@ services:
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --workers 1 --threads 2
-    disk:
-      name: data
-      mountPath: /data
-      sizeGB: 1
     envVars:
       - key: GOOGLE_API_KEY
         sync: false

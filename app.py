@@ -17,10 +17,7 @@ load_dotenv()
 # ─────────────────────────────────────────────
 
 # Use /data for Render (persistent disk), fallback to local for development
-if os.path.exists("/data"):
-    DB_PATH = os.environ.get("DB_PATH", "/data/users.db")
-else:
-    DB_PATH = os.environ.get("DB_PATH", "users.db")
+DB_PATH = "users.db"
 
 
 def get_db():
