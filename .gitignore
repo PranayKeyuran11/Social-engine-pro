@@ -1,0 +1,20 @@
+# Environment variables (secret keys)
+.env
+
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Database (local only)
+*.db
+
+# Mac system files
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Render / deployment
+*.log
