@@ -4,27 +4,13 @@ import logging
 from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-import psycopg2
-import psycopg2.extras
+from database import get_db
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
 scheduler = BackgroundScheduler(timezone=IST)
-
-DATABASE_URL = os.environ.get("DATABASE_URL")
-
-
-# ─────────────────────────────────────────────
-#  DB HELPER
-# ─────────────────────────────────────────────
-
-def get_db():
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.autocommit = False
-    return conn
-
 
 # ─────────────────────────────────────────────
 #  CORE: Run a single automation
@@ -37,7 +23,7 @@ def run_automation_for_user(automation_id: int):
     # Fetch automation
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute("SELECT * FROM automations WHERE id = %s", (automation_id,))
             auto = cur.fetchone()
     finally:
@@ -50,7 +36,7 @@ def run_automation_for_user(automation_id: int):
     # Fetch user's own Gemini API key if they have one
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute("SELECT gemini_api_key FROM users WHERE id = %s", (auto["user_id"],))
             user = cur.fetchone()
     finally:
@@ -140,7 +126,7 @@ def check_and_run_due_automations():
 
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute("""
                 SELECT * FROM automations
                 WHERE is_active = TRUE
