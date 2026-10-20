@@ -10,23 +10,21 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-import psycopg2
-import psycopg2.extras
-from graph.orchestrator import build_graph
-from scheduler import start_scheduler, schedule_automation, unschedule_automation
 
 load_dotenv()
+
+from database import DATABASE_URL, get_db
+from graph.orchestrator import build_graph
+from scheduler import start_scheduler, schedule_automation, unschedule_automation
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-
 # SMTP config (use Gmail App Password or any SMTP)
 SMTP_HOST     = os.environ.get("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT     = int(os.environ.get("SMTP_PORT", 587))
-SMTP_USER     = os.environ.get("SMTP_USER", "")        # your Gmail address
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")    # Gmail App Password
+SMTP_USER     = os.environ.get("SMTP_USER") or os.environ.get("GMAIL_ADDRESS", "")
+SMTP_PASSWORD = (os.environ.get("SMTP_PASSWORD") or os.environ.get("GMAIL_APP_PASSWORD", "")).replace(" ", "")
 
 DAILY_GENERATION_LIMIT = int(os.environ.get("DAILY_GENERATION_LIMIT", 10))
 OTP_EXPIRY_MINUTES = 15
@@ -35,19 +33,14 @@ OTP_EXPIRY_MINUTES = 15
 # DATABASE
 # ─────────────────────────────────────────────
 
-def get_db():
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.autocommit = False
-    return conn
-
-
 def init_db():
+    primary_key = "SERIAL PRIMARY KEY" if DATABASE_URL else "INTEGER PRIMARY KEY AUTOINCREMENT"
     conn = get_db()
     try:
         with conn.cursor() as cur:
-            cur.execute('''
+            cur.execute(f'''
                 CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
+                    id {primary_key},
                     username TEXT UNIQUE NOT NULL,
                     email TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
@@ -56,9 +49,9 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            cur.execute('''
+            cur.execute(f'''
                 CREATE TABLE IF NOT EXISTS automations (
-                    id SERIAL PRIMARY KEY,
+                    id {primary_key},
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     topics TEXT NOT NULL,
                     context TEXT,
@@ -71,9 +64,9 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            cur.execute('''
+            cur.execute(f'''
                 CREATE TABLE IF NOT EXISTS otp_tokens (
-                    id SERIAL PRIMARY KEY,
+                    id {primary_key},
                     email TEXT NOT NULL,
                     otp TEXT NOT NULL,
                     purpose TEXT NOT NULL,
@@ -82,24 +75,18 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            cur.execute('''
+            cur.execute(f'''
                 CREATE TABLE IF NOT EXISTS usage_logs (
-                    id SERIAL PRIMARY KEY,
+                    id {primary_key},
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     date DATE NOT NULL DEFAULT CURRENT_DATE,
                     generation_count INTEGER NOT NULL DEFAULT 0,
                     UNIQUE(user_id, date)
                 )
             ''')
-            # Add columns to existing tables if upgrading
-            try:
+            if DATABASE_URL:
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT FALSE")
-            except Exception:
-                pass
-            try:
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS gemini_api_key TEXT")
-            except Exception:
-                pass
         conn.commit()
     finally:
         conn.close()
@@ -158,7 +145,7 @@ def create_otp(email, purpose):
 def verify_otp(email, otp, purpose):
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute(
                 """SELECT * FROM otp_tokens
                    WHERE email=%s AND otp=%s AND purpose=%s AND used=FALSE
@@ -223,7 +210,7 @@ def hash_password(password):
 def get_user_by_email(email):
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute('SELECT * FROM users WHERE email = %s', (email,))
             return cur.fetchone()
     finally:
@@ -233,7 +220,7 @@ def get_user_by_email(email):
 def get_user_by_id(user_id):
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute('SELECT * FROM users WHERE id = %s', (user_id,))
             return cur.fetchone()
     finally:
@@ -243,7 +230,7 @@ def get_user_by_id(user_id):
 def get_user_by_username(username):
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute('SELECT * FROM users WHERE username = %s', (username,))
             return cur.fetchone()
     finally:
@@ -301,7 +288,7 @@ def update_gemini_key(user_id, api_key):
 def get_daily_usage(user_id):
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute(
                 'SELECT generation_count FROM usage_logs WHERE user_id=%s AND date=CURRENT_DATE',
                 (user_id,)
@@ -1116,7 +1103,7 @@ def index():
 def _get_automations():
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute('SELECT * FROM automations WHERE user_id = %s ORDER BY created_at DESC', (session['user_id'],))
             return [dict(row) for row in cur.fetchall()]
     finally:
@@ -1157,7 +1144,8 @@ def automation_create():
                    VALUES (%s,%s,%s,%s,%s,%s,TRUE,0) RETURNING id''',
                 (session['user_id'], topics_str, context, email, send_time, timezone)
             )
-            auto_id = cur.fetchone()[0]
+            inserted = cur.fetchone()
+            auto_id = inserted["id"]
         conn.commit()
     finally:
         conn.close()
@@ -1170,7 +1158,7 @@ def automation_create():
 def automation_toggle(auto_id):
     conn = get_db()
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute('SELECT * FROM automations WHERE id=%s AND user_id=%s', (auto_id, session['user_id']))
             auto = cur.fetchone()
         if not auto:
